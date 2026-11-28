@@ -103,13 +103,26 @@ class ColorEmojiCommand : KoinComponent {
         try {
             val playerManager = PacketEvents.getAPI().playerManager
             // 位置・色はフレーム間で不変のため、パケットは1回だけ生成して各フレームで再送する
-            val packets = buildParticlePackets(stamp.getStamp(), config, sender.location)
+            val origin = sender.location
+            val packets = buildParticlePackets(stamp.getStamp(), config, origin)
             if (packets.isEmpty()) return
             val count = 8
+            // スタンプは頭上に最大 3 * size + 2 ブロック伸びるので、そのぶんも見える距離に足しておく
+            val viewDistance = PARTICLE_VIEW_DISTANCE + 3 * config.size + 2
+            val viewDistanceSquared = viewDistance * viewDistance
 
             repeat(count * config.second) {
                 // PacketEvents にはブロードキャストがないため、メインスレッドでオンラインプレイヤーを取得してから各自に送る
-                val players = Bukkit.getOnlinePlayers().toList()
+                // 別ワールドや遠くのプレイヤーに送っても見えないし、別ワールドだと同じ座標に幽霊スタンプが出てしまう
+                val players =
+                    Bukkit.getOnlinePlayers().filter { player ->
+                        player.world == origin.world &&
+                            player.location.distanceSquared(origin) <= viewDistanceSquared
+                    }
+                if (players.isEmpty()) {
+                    delay(1000L / count)
+                    return@repeat
+                }
                 coroutineScope {
                     packets.chunked(256).forEach { chunk ->
                         launch(Dispatchers.IO) {
@@ -128,6 +141,11 @@ class ColorEmojiCommand : KoinComponent {
             // 例外時もクールダウンが残らないよう必ず解除する
             summonCooldown.remove(sender.uniqueId)
         }
+    }
+
+    private companion object {
+        // バニラのクライアントは longDistance = false のパーティクルを 32 ブロックより先では描画しない
+        const val PARTICLE_VIEW_DISTANCE = 32.0
     }
 
     private data class ParticlePixel(
